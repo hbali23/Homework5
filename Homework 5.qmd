@@ -166,7 +166,7 @@ print(conf_matrix)
 # Define the models
 # Define logistic regression models
 model1_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR
-model2_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + factor(Sex) + factor(ExerciseAngina) + factor(ChestPainType) + factor(RestingECG)
+model2_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + factor(SexM) + factor(ExerciseAnginaN) + factor(ChestPainTypeASY) + factor(RestingECGNormal)
 model3_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + I(Age^2) + RestingBP:Cholesterol
 
 model1_train <- train(
@@ -228,7 +228,7 @@ print(conf_matrix)
 library(caret)
 
 # Define the formula for the decision tree model
-tree_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + factor(Sex) + factor(ExerciseAngina) + factor(ChestPainType) + factor(RestingECG)
+tree_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + factor(SexM) + factor(ExerciseAnginaN) + factor(ChestPainTypeASY) + factor(RestingECGNormal)
 
 # Define tuning grid for rpart (cp values)
 cp_values <- seq(0, 0.1, by = 0.001)
@@ -256,28 +256,30 @@ print(conf_matrix_rpart)
 ```
 ##Rain Forest Model
 ```{r}
-# Define tuning grid for random forest (mtry values)
-mtry_values <- 1:ncol(heart_train)  # try all predictors
-tune_grid3 <- expand.grid(mtry = mtry_values)
 
-# Train the random forest model
+# Set up empty var for tuning.
+num_predictors <- length(all.vars(tree_formula)) - 1  
+
+# New Tuning for this tree fit
+tuneGrid <- expand.grid(mtry = 1:num_predictors)
+
 set.seed(1234)
 model_rf_train <- train(
   tree_formula,
   data = heart_train,
   method = "rf",
   trControl = train_control,
-  tuneGrid = tune_grid3,
+  tuneGrid = tuneGrid,
   preProcess = c("center", "scale")
 )
 
 # Print the best model and its parameters
 print(model_rf_train)
 
-# Evaluate the random forest model on the test set
-predictions_rf <- predict(model_rf_train, newdata = heart_test)
-conf_matrix_rf <- confusionMatrix(predictions_rf, heart_test$HeartDiseaseFactor)
-print(conf_matrix_rf)
+# Evaluate the decision tree model on the test set
+predictions_rpart <- predict(model_rf_train, newdata = heart_test)
+conf_matrix_rpart <- confusionMatrix(predictions_rpart, heart_test$HeartDiseaseFactor)
+print(conf_matrix_rpart)
 
 
 ```
@@ -286,37 +288,29 @@ print(conf_matrix_rf)
 ##Booted Tree Model
 
 ```{r}
-# Define tuning grid for boosted tree (gbm parameters)
-n_trees <- c(25, 50, 100, 200)
-interaction_depth <- 1:3
-shrinkage <- 0.1
-n_minobsinnode <- 10
-
-tune_grid4 <- expand.grid(
-  n.trees = n_trees,
-  interaction.depth = interaction_depth,
-  shrinkage = shrinkage,
-  n.minobsinnode = n_minobsinnode
+# Define the tuning grid for the boosted tree
+tuneGrid2 <- expand.grid(
+  n.trees = c(25, 50, 100, 200),
+  interaction.depth = c(1, 2, 3),
+  shrinkage = 0.1,
+  n.minobsinnode = 10
 )
 
-# Train the boosted tree model
+
+# Train the boosted tree model using caret
 set.seed(1234)
 model_gbm_train <- train(
   tree_formula,
   data = heart_train,
   method = "gbm",
   trControl = train_control,
-  tuneGrid = tune_grid4,
-  preProcess = c("center", "scale")
+  tuneGrid = tuneGrid2,
+  preProcess = c("center", "scale"),
+  verbose = FALSE
 )
 
 # Print the best model and its parameters
 print(model_gbm_train)
-
-# Evaluate the boosted tree model on the test set
-predictions_gbm <- predict(model_gbm_train, newdata = heart_test)
-conf_matrix_gbm <- confusionMatrix(predictions_gbm, heart_test$HeartDiseaseFactor)
-print(conf_matrix_gbm)
 
 ```
 
