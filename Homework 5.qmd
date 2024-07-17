@@ -4,23 +4,345 @@ format: html
 editor: visual
 ---
 
-## Quarto
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+## Task 1: Conceptual Questions
 
-## Running Code
+1. What is the purpose of using cross-validation when fitting a random forest model?
+Cross-validation helps assess the performance of a random forest model by iteratively splitting the data into training and validation sets, ensuring robustness in model evaluation and hyperparameter tuning.
 
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+2. Describe the bagged tree algorithm.
+Bagging (Bootstrap Aggregating) involves creating multiple bootstrap samples from the original dataset, training a decision tree on each sample, and then aggregating their predictions (e.g., averaging for regression or voting for classification) to reduce variance and improve model accuracy.
 
+3. What is meant by a general linear model?
+A general linear model (GLM) is a statistical model that assumes a linear relationship between the dependent variable and predictor variables, with normally distributed errors.
+
+4. When fitting a multiple linear regression model, what does adding an interaction term do? That is,
+what does it allow the model to do differently as compared to when it is not included in the model?
+Adding an interaction term allows the model to capture non-additive effects between predictors, meaning the relationship between the dependent variable and one predictor variable may vary depending on the value of another predictor.
+
+5. Why do we split our data into a training and test set?
+Splitting data into training and test sets helps evaluate the performance of a predictive model on unseen data, thereby estimating how well the model generalizes to new, unseen observations and avoiding overfitting to the training data.
+
+
+## Task 2
 ```{r}
-1 + 1
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(GGally)
+library(tidyr)
 ```
 
-You can add options to executable code like this
 
+## 1. Quickly understand your data. Check on missingness and summarize the data, especially with respect
+to the relationships of the variables to HeartDisease.
 ```{r}
-#| echo: false
-2 * 2
+#Read in data
+heart <- read_excel("heart.xls")
+
+#Understand the structure of the dataset
+str(heart)
+summary(heart)
+
+#Check for missing values
+missing_values <- sapply(heart, function(x) sum(is.na(x)))
+print(missing_values)
+
+# Summary statistics for numeric variables
+numeric_summary <- heart %>% 
+  select_if(is.numeric) %>%
+  summary()
+print(numeric_summary)
+
+# Count of HeartDisease cases
+heart_disease_counts <- heart %>% 
+  group_by(HeartDisease) %>% 
+  summarise(count = n())
+print(heart_disease_counts)
+
+# Correlation matrix for numeric predictors
+numeric_vars <- heart %>% select_if(is.numeric)
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+print(cor_matrix)
+# Strong correlations with HeartDisease indicate potential significance so age, restingbp, fastingbs and oldpeak are strongest indicators
+
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+
+
+## 2. Create a new variable that is a factor version of the HeartDisease variable (if needed, this depends on
+how you read in your data). Remove the ST_Slope variable and the original HeartDisease variable
+(if applicable).
+```{r}
+#Create a factor version of the HeartDisease variable
+heart <- heart %>%
+  mutate(HeartDiseaseFactor = as.factor(HeartDisease))
+
+#Remove the ST_Slope variable and the original HeartDisease variable
+heart <- heart %>%
+  select(-ST_Slope, -HeartDisease)
+
+```
+
+
+## 3. We’ll be doing a kNN model below to predict whether or not someone has heart disease. To use
+kNN we generally want to have all numeric predictors (although we could try to create our own loss
+function as an alternative). In this case we have some categorical predictors still in our data set: Sex,
+ExerciseAngina ChestPainType, and RestingECG. 
+
+Create dummy columns corresponding to the values of these three variables for use in our kNN fit. The
+caret vignette has a function to help us out here. You should use dummyVars() and predict() to create
+new columns. Then add these columns to our data frame.
+
+```{r}
+# Create dummy variables for categorical predictors
+dummies <- dummyVars("~ Sex + ExerciseAngina + ChestPainType + RestingECG", data = heart)
+dummy <- predict(dummies, newdata = heart)
+
+# Convert the dummy data to a data frame
+dummy <- as.data.frame(dummy)
+
+# Add the dummy variables to the dataset
+heart <- cbind(heart, dummy)
+
+# Remove the original categorical predictors
+heart <- heart %>%
+  select(-Sex, -ExerciseAngina, -ChestPainType, -RestingECG)
+
+
+```
+
+
+## Split your Data
+```{r}
+# Split the data into training and testing sets
+set.seed(123)  # Setting seed for reproducibility
+trainIndex <- createDataPartition(heart$HeartDiseaseFactor, p = 0.8, 
+                                  list = FALSE, 
+                                  times = 1)
+heart_train <- heart[trainIndex,]
+heart_test  <- heart[-trainIndex,]
+
+# Verify the split
+cat("Training set dimensions:", dim(heart_train), "\n")
+cat("Test set dimensions:", dim(heart_test), "\n")
+```
+
+
+## KNN Model
+```{r}
+# Set up the train control for cross-validation
+train_control <- trainControl(method = "repeatedcv", 
+                              number = 10, 
+                              repeats = 3)
+
+# Set up the tuning grid for k values
+tune_grid <- expand.grid(k = 1:40)
+
+# Step 9: Train the kNN model
+knn_model <- train(HeartDiseaseFactor ~ ., 
+                   data = heart_train, 
+                   method = "knn", 
+                   trControl = train_control, 
+                   tuneGrid = tune_grid, 
+                   preProcess = c("center", "scale"))  #preprocessing data here
+
+# Print model summary
+print(knn_model)
+
+# Make predictions
+knn_predictions <- predict(knn_model, newdata = heart_test)
+
+# Step 11: Evaluate the model
+conf_matrix <- confusionMatrix(knn_predictions, heart_test$HeartDiseaseFactor)
+print(conf_matrix)
+```
+
+
+
+## Logistic Regression
+```{r}
+# Define the models
+# Define logistic regression models
+model1_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR
+model2_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + factor(Sex) + factor(ExerciseAngina) + factor(ChestPainType) + factor(RestingECG)
+model3_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + I(Age^2) + RestingBP:Cholesterol
+
+model1_train <- train(
+  model1_formula,
+  heart_train, 
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  preProcess = c("center", "scale")
+)
+
+model2_train <- train(
+  model2_formula,
+  heart_train, 
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  preProcess = c("center", "scale")
+)
+
+model3_train <- train(
+  model3_formula,
+  heart_train, 
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  preProcess = c("center", "scale")
+)
+
+# Extract resamples into a list
+results <- resamples(list(model1 = model1_train, model2 = model2_train, model3 = model3_train))
+print(results)
+
+# Summarize the results
+results <- summary(results)
+print(results)
+
+# Extract accuracies
+model_accuracies <- results$statistics$Accuracy[, "Mean"]
+
+# Identify the best model
+best_model_name <- names(which.max(model_accuracies))
+print(paste("Best model:", best_model_name))
+
+# Retrieve the best model
+best_model_train <- get(paste0(best_model_name, "_train"))
+print(best_model_train)
+
+# Evaluate the best model on the test set
+predictions <- predict(best_model_train, newdata = heart_test)
+conf_matrix <- confusionMatrix(predictions, heart_test$HeartDiseaseFactor)
+print(conf_matrix)
+```
+
+## Tree Models
+
+## Decision Tree Model
+```{r}
+library(caret)
+
+# Define the formula for the decision tree model
+tree_formula <- HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR + factor(Sex) + factor(ExerciseAngina) + factor(ChestPainType) + factor(RestingECG)
+
+# Define tuning grid for rpart (cp values)
+cp_values <- seq(0, 0.1, by = 0.001)
+tune_grid2 <- expand.grid(cp = cp_values)
+
+# Train the decision tree model
+set.seed(1234)
+model_rpart_train <- train(
+  tree_formula,
+  data = heart_train,
+  method = "rpart",
+  trControl = train_control,
+  tuneGrid = tune_grid2,
+  preProcess = c("center", "scale")
+)
+
+# Print the best model and its parameters
+print(model_rpart_train)
+
+# Evaluate the decision tree model on the test set
+predictions_rpart <- predict(model_rpart_train, newdata = heart_test)
+conf_matrix_rpart <- confusionMatrix(predictions_rpart, heart_test$HeartDiseaseFactor)
+print(conf_matrix_rpart)
+
+```
+##Rain Forest Model
+```{r}
+# Define tuning grid for random forest (mtry values)
+mtry_values <- 1:ncol(heart_train)  # try all predictors
+tune_grid3 <- expand.grid(mtry = mtry_values)
+
+# Train the random forest model
+set.seed(1234)
+model_rf_train <- train(
+  tree_formula,
+  data = heart_train,
+  method = "rf",
+  trControl = train_control,
+  tuneGrid = tune_grid3,
+  preProcess = c("center", "scale")
+)
+
+# Print the best model and its parameters
+print(model_rf_train)
+
+# Evaluate the random forest model on the test set
+predictions_rf <- predict(model_rf_train, newdata = heart_test)
+conf_matrix_rf <- confusionMatrix(predictions_rf, heart_test$HeartDiseaseFactor)
+print(conf_matrix_rf)
+
+
+```
+
+
+##Booted Tree Model
+
+```{r}
+# Define tuning grid for boosted tree (gbm parameters)
+n_trees <- c(25, 50, 100, 200)
+interaction_depth <- 1:3
+shrinkage <- 0.1
+n_minobsinnode <- 10
+
+tune_grid4 <- expand.grid(
+  n.trees = n_trees,
+  interaction.depth = interaction_depth,
+  shrinkage = shrinkage,
+  n.minobsinnode = n_minobsinnode
+)
+
+# Train the boosted tree model
+set.seed(1234)
+model_gbm_train <- train(
+  tree_formula,
+  data = heart_train,
+  method = "gbm",
+  trControl = train_control,
+  tuneGrid = tune_grid4,
+  preProcess = c("center", "scale")
+)
+
+# Print the best model and its parameters
+print(model_gbm_train)
+
+# Evaluate the boosted tree model on the test set
+predictions_gbm <- predict(model_gbm_train, newdata = heart_test)
+conf_matrix_gbm <- confusionMatrix(predictions_gbm, heart_test$HeartDiseaseFactor)
+print(conf_matrix_gbm)
+
+```
+
+
+##Evaluate
+```{r}
+# Evaluate on test set and print confusion matrices
+# Decision Tree (rpart)
+predictions_rpart <- predict(model_rpart_train, newdata = heart_test)
+conf_matrix_rpart <- confusionMatrix(predictions_rpart, heart_test$HeartDiseaseFactor)
+print("Confusion Matrix for Decision Tree (rpart):")
+print(conf_matrix_rpart)
+
+# Random Forest (rf)
+predictions_rf <- predict(model_rf_train, newdata = heart_test)
+conf_matrix_rf <- confusionMatrix(predictions_rf, heart_test$HeartDiseaseFactor)
+print("Confusion Matrix for Random Forest (rf):")
+print(conf_matrix_rf)
+
+# Boosted Tree (gbm)
+predictions_gbm <- predict(model_gbm_train, newdata = heart_test)
+conf_matrix_gbm <- confusionMatrix(predictions_gbm, heart_test$HeartDiseaseFactor)
+print("Confusion Matrix for Boosted Tree (gbm):")
+print(conf_matrix_gbm)
+```
+
+
+##Wrap Up
+The model with the highest accuracy value indicates which model's predictions aligned the closest with the actual outcomes in the test data. Amongst the three models, the one with the highest accuracy was model 2. 
